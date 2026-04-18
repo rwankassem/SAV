@@ -1,176 +1,85 @@
+import cv2
 import numpy as np
-import mediapipe as mp
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
-from PIL import Image
 
-# =========================
-# Config
-# =========================
-WEIGHTS_PATH = r"C:\Users\rwank\OneDrive\Desktop\SAV\model\eyes_best.weights.h5"
-IMG = 128
+MODEL_PATH = "eyes_int8.tflite"
+IMG_SIZE = 128
+MARGIN = 0.6
 
-THRESH_OPEN = 0.45
-THRESH_CLOSE = 0.33
-MARGIN = 0.12
-INVERT_OPEN_PROB = False
+THRESH_LOW = 0.30
+THRESH_HIGH = 0.45
 
-# =========================
-# Build model architecture
-# =========================
-aug = keras.Sequential([
-    layers.RandomFlip("horizontal"),
-    layers.RandomRotation(0.05),
-    layers.RandomZoom(0.10),
-    layers.RandomContrast(0.25),
-], name="augmentation")
+interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+interpreter.allocate_tensors()
 
-noise = layers.GaussianNoise(0.02)
+inp = interpreter.get_input_details()[0]
+out = interpreter.get_output_details()[0]
 
-base = tf.keras.applications.MobileNetV3Small(
-    input_shape=(IMG, IMG, 3),
-    include_top=False,
-    weights="imagenet"
-)
+in_scale, in_zero = inp["quantization"]
+out_scale, out_zero = out["quantization"]
 
-inp = keras.Input(shape=(IMG, IMG, 3))
-x = aug(inp)
-x = noise(x)
-x = tf.keras.applications.mobilenet_v3.preprocess_input(x)
+LEFT_EYE = [33, 133, 160, 144, 159, 145]
+RIGHT_EYE = [362, 263, 387, 373, 386, 374]
 
-base.trainable = False
-x = base(x, training=False)
-x = layers.GlobalAveragePooling2D()(x)
-x = layers.Dropout(0.20)(x)
-out = layers.Dense(1, activation="sigmoid")(x)
 
-model = keras.Model(inp, out)
+def predict_eye(img):
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
 
-# Load trained weights
-model.load_weights(WEIGHTS_PATH)
+    x = img.astype(np.float32)
+    xq = (x / in_scale + in_zero).astype(np.int8)[None, ...]
 
-# =========================
-# MediaPipe FaceMesh
-# =========================
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(
-    static_image_mode=True,
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5
-)
+    interpreter.set_tensor(inp["index"], xq)
+    interpreter.invoke()
 
-LEFT_EYE_IDS = set()
-RIGHT_EYE_IDS = set()
+    yq = interpreter.get_tensor(out["index"])[0][0]
+    score = (yq - out_zero) * out_scale
 
-for a, b in mp_face_mesh.FACEMESH_LEFT_EYE:
-    LEFT_EYE_IDS.add(a)
-    LEFT_EYE_IDS.add(b)
+    return float(score)
 
-for a, b in mp_face_mesh.FACEMESH_RIGHT_EYE:
-    RIGHT_EYE_IDS.add(a)
-    RIGHT_EYE_IDS.add(b)
 
-EYE_IDS = LEFT_EYE_IDS.union(RIGHT_EYE_IDS)
+def crop_eye(frame, lm, idxs, w, h):
+    xs = [lm[i].x * w for i in idxs]
+    ys = [lm[i].y * h for i in idxs]
 
-# =========================
-# Helper functions
-# =========================
-def resize_rgb_image(img_rgb: np.ndarray, size=(IMG, IMG)) -> np.ndarray:
-    pil_img = Image.fromarray(img_rgb.astype(np.uint8))
-    pil_img = pil_img.resize(size)
-    return np.array(pil_img)
-
-def predict_open_prob(eye_rgb: np.ndarray) -> float:
-    eye_rgb = resize_rgb_image(eye_rgb, (IMG, IMG))
-    x = eye_rgb.astype(np.float32)
-    x = tf.keras.applications.mobilenet_v3.preprocess_input(x)
-    x = np.expand_dims(x, axis=0)
-
-    p = model.predict(x, verbose=0)[0][0]
-    if INVERT_OPEN_PROB:
-        p = 1.0 - p
-
-    return float(np.clip(p, 0.0, 1.0))
-
-def eye_bbox_from_landmarks(lms, w: int, h: int):
-    xs, ys = [], []
-    for idx in EYE_IDS:
-        xs.append(int(lms[idx].x * w))
-        ys.append(int(lms[idx].y * h))
-
-    if not xs:
-        return None
-
-    x1, x2 = min(xs), max(xs)
-    y1, y2 = min(ys), max(ys)
+    x1, x2 = int(min(xs)), int(max(xs))
+    y1, y2 = int(min(ys)), int(max(ys))
 
     bw = x2 - x1
     bh = y2 - y1
 
-    x1 = int(x1 - MARGIN * bw)
-    x2 = int(x2 + MARGIN * bw)
-    y1 = int(y1 - MARGIN * bh)
-    y2 = int(y2 + MARGIN * bh)
+    x1 -= int(bw * MARGIN)
+    x2 += int(bw * MARGIN)
+    y1 -= int(bh * MARGIN)
+    y2 += int(bh * MARGIN)
 
-    x1 = max(0, x1)
-    y1 = max(0, y1)
-    x2 = min(w - 1, x2)
-    y2 = min(h - 1, y2)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
 
-    if x2 <= x1 or y2 <= y1:
-        return None
+    if (x2 - x1) < 40 or (y2 - y1) < 30:
+        return None, None
 
-    return x1, y1, x2, y2
+    crop = frame[y1:y2, x1:x2]
 
-# =========================
-# Main API function
-# =========================
-def run_eye_inference(frame_rgb: np.ndarray):
-    if frame_rgb is None:
-        return {
-            "eye_state": "unknown",
-            "confidence": None
-        }
+    if crop.size == 0:
+        return None, None
 
-    h, w = frame_rgb.shape[:2]
-    res = face_mesh.process(frame_rgb)
+    return crop, (x1, y1, x2, y2)
 
-    if not res.multi_face_landmarks:
-        return {
-            "eye_state": "unknown",
-            "confidence": None
-        }
 
-    lms = res.multi_face_landmarks[0].landmark
-    box = eye_bbox_from_landmarks(lms, w, h)
+def get_best_eye(frame, lm, w, h):
 
-    if box is None:
-        return {
-            "eye_state": "unknown",
-            "confidence": None
-        }
+    left, lbox = crop_eye(frame, lm, LEFT_EYE, w, h)
+    right, rbox = crop_eye(frame, lm, RIGHT_EYE, w, h)
 
-    x1, y1, x2, y2 = box
-    eye_crop = frame_rgb[y1:y2, x1:x2]
+    candidates = []
 
-    if eye_crop.size == 0:
-        return {
-            "eye_state": "unknown",
-            "confidence": None
-        }
+    if left is not None:
+        candidates.append((left, lbox))
+    if right is not None:
+        candidates.append((right, rbox))
 
-    p_open = predict_open_prob(eye_crop)
+    if not candidates:
+        return frame, (0, 0, w, h)
 
-    if p_open >= THRESH_OPEN:
-        eye_state = "open"
-    elif p_open <= THRESH_CLOSE:
-        eye_state = "closed"
-    else:
-        eye_state = "uncertain"
-
-    return {
-        "eye_state": eye_state,
-        "confidence": round(float(p_open), 4)
-    }
+    return max(candidates, key=lambda x: x[0].shape[0] * x[0].shape[1])
