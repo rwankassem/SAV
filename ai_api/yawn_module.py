@@ -1,19 +1,16 @@
 import math
-import numpy as np
 
 MAR_THRESHOLD = 0.55
+YAWN_FRAMES = 3
 
-# منع التذبذب
-YAWN_FRAMES_THRESHOLD = 3
+buffer = []
 
-yawn_buffer = []
+def euclidean(a, b):
+    return math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2)
 
+def detect_yawn(lm):
+    global buffer
 
-def euclidean(p1, p2):
-    return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
-
-
-def calculate_mar(lm):
     try:
         upper = lm[13]
         lower = lm[14]
@@ -24,35 +21,21 @@ def calculate_mar(lm):
         horizontal = euclidean(left, right)
 
         if horizontal == 0:
-            return 0.0
+            return {"mar": 0.0, "yawn": False}
 
-        return vertical / horizontal
+        mar = vertical / horizontal
+        is_yawn = mar > MAR_THRESHOLD
+
+        buffer.append(is_yawn)
+        if len(buffer) > YAWN_FRAMES:
+            buffer.pop(0)
+
+        stable = sum(buffer) >= 2
+
+        return {
+            "mar": float(mar),
+            "yawn": stable
+        }
 
     except:
-        return 0.0
-
-
-def detect_yawn(lm):
-    global yawn_buffer
-
-    mar = calculate_mar(lm)
-
-    is_yawn = mar > MAR_THRESHOLD
-
-    # smoothing buffer
-    yawn_buffer.append(is_yawn)
-    if len(yawn_buffer) > YAWN_FRAMES_THRESHOLD:
-        yawn_buffer.pop(0)
-
-    stable_yawn = sum(yawn_buffer) >= 2 
-
-    print("\n---- YAWN DEBUG ----")
-    print("MAR:", mar)
-    print("THRESH:", MAR_THRESHOLD)
-    print("BUFFER:", yawn_buffer)
-    print("STABLE YAWN:", stable_yawn)
-
-    return {
-        "mar": float(mar),
-        "yawn_detected": bool(stable_yawn)
-    }
+        return {"mar": 0.0, "yawn": False}
