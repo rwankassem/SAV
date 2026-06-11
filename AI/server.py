@@ -1,22 +1,23 @@
-from fastapi import FastAPI, UploadFile, File
-import cv2
+from fastapi import FastAPI, File, UploadFile
 import numpy as np
+import cv2
 import mediapipe as mp
 import tensorflow as tf
 import time
-from collections import deque
 import math
+from collections import deque
 
 app = FastAPI()
 
 # =========================
 # MODEL
 # =========================
-MODEL_PATH = r"C:\Users\rwank\OneDrive\Desktop\SAV\model\eyes_int8.tflite"
+MODEL_PATH = "eyes_int8.tflite"
 IMG = 128
 
 interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
+
 inp = interpreter.get_input_details()[0]
 out = interpreter.get_output_details()[0]
 
@@ -33,8 +34,8 @@ def predict_open_prob(eye_bgr):
     interpreter.invoke()
 
     yq = interpreter.get_tensor(out["index"])[0][0]
-    return (yq - out_zero) * out_scale
-
+    y = (yq - out_zero) * out_scale
+    return float(y)
 
 # =========================
 # MEDIAPIPE
@@ -48,116 +49,134 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.5
 )
 
+LEFT_EYE_IDS = set()
+RIGHT_EYE_IDS = set()
+
+for a, b in mp_face_mesh.FACEMESH_LEFT_EYE:
+    LEFT_EYE_IDS.update([a, b])
+for a, b in mp_face_mesh.FACEMESH_RIGHT_EYE:
+    RIGHT_EYE_IDS.update([a, b])
+
+EYE_IDS = LEFT_EYE_IDS | RIGHT_EYE_IDS
+
+def eye_bbox(lms, w, h):
+    xs, ys = [], []
+    for i in EYE_IDS:
+        xs.append(int(lms[i].x * w))
+        ys.append(int(lms[i].y * h))
+
+    if not xs:
+        return None
+
+    return min(xs), min(ys), max(xs), max(ys)
+
 # =========================
-# STATE
+# STATE MEMORY (important)
+# =========================
+hist_close = deque(maxlen=11)
+state = "OPEN"
+eye_close_start = None
+eye_alert = False
+eye_danger = False
+
+# =========================
+# HEAD (simplified)
 # =========================
 yawn_count = 0
 yawn_active = False
-head_down_start = None
 
 MAR_THRESHOLD = 0.6
 
+def euclidean(a, b):
+    return math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2)
 
+def MAR(lm):
+    up = lm[13]
+    down = lm[14]
+    l = lm[61]
+    r = lm[291]
 
-def euclidean_distance(p1, p2):
-    return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
-
-def calculate_mar(landmarks):
-    upper = landmarks[13]
-    lower = landmarks[14]
-    left = landmarks[78]
-    right = landmarks[308]
-    vertical = euclidean_distance(upper, lower)
-    horizontal = euclidean_distance(left, right)
-    return vertical / horizontal if horizontal != 0 else 0.0
-
-
-# =========================
-# CORE LOGIC
-# =========================
-def process_frame(frame):
-
-    global yawn_count, yawn_active, head_down_start
-
-    state = {
-        "eyes": "UNKNOWN",
-        "yawn": "NORMAL",
-        "head": "OK"
-    }
-
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    res = face_mesh.process(rgb)
-
-    if res.multi_face_landmarks:
-        lm = res.multi_face_landmarks[0].landmark
-
-        # =========================
-        # YAWN
-        # =========================
-        mar = calculate_mar(lm)
-
-        if mar > MAR_THRESHOLD and not yawn_active:
-            yawn_count += 1
-            yawn_active = True
-
-        if mar < MAR_THRESHOLD:
-            yawn_active = False
-
-        if yawn_count >= 7:
-            state["yawn"] = "DANGER"
-        elif yawn_count >= 5:
-            state["yawn"] = "DROWSY"
-        else:
-            state["yawn"] = "NORMAL"
-
-        # =========================
-        # HEAD
-        # =========================
-        pitch_sim = lm[1].y
-
-        if pitch_sim > 0.6:
-            if head_down_start is None:
-                head_down_start = time.time()
-
-            elapsed = time.time() - head_down_start
-
-            if elapsed > 4:
-                state["head"] = "DANGER"
-            elif elapsed > 2:
-                state["head"] = "ALERT"
-            else:
-                state["head"] = "OK"
-        else:
-            head_down_start = None
-            state["head"] = "OK"
-
-        # =========================
-        # EYES (MODEL)
-        # =========================
-        eye_sample = frame[0:100, 0:100]
-        p_open = predict_open_prob(eye_sample)
-
-        state["eyes"] = "CLOSED" if p_open < 0.5 else "OPEN"
-
-    return state
-
+    return euclidean(up, down) / euclidean(l, r)
 
 # =========================
 # API
 # =========================
-@app.post("/predict")
+@app.post("/esp")
 async def predict(file: UploadFile = File(...)):
 
-    contents = await file.read()
+    img_bytes = await file.read()
+    np_img = np.frombuffer(img_bytes, np.uint8)
+    frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    np_arr = np.frombuffer(contents, np.uint8)
-    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    h, w = frame.shape[:2]
 
-    state = process_frame(frame)
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    res = face_mesh.process(rgb)
 
-    return state
+    response = {
+        "eyes": "UNKNOWN",
+        "yawn": yawn_count,
+        "head": "OK"
+    }
 
+    if not res.multi_face_landmarks:
+        return response
 
-@app.get("/")
-def home():
-    return {"status": "AI Server Running"}
+    lm = res.multi_face_landmarks[0].landmark
+
+    # =========================
+    # EYES
+    # =========================
+    box = eye_bbox(lm, w, h)
+
+    if box:
+        x1, y1, x2, y2 = box
+        eye_crop = frame[y1:y2, x1:x2]
+
+        if eye_crop.size != 0:
+            p_open = predict_open_prob(eye_crop)
+            p_open = 1 - p_open
+            p_close = 1 - p_open
+
+            hist_close.append(p_close)
+            avg = float(sum(hist_close) / len(hist_close))
+
+            if state == "OPEN" and avg >= 0.67:
+                state = "CLOSED"
+            elif state == "CLOSED" and avg <= 0.55:
+                state = "OPEN"
+
+            # timing logic
+            if state == "CLOSED":
+                global eye_close_start
+                if eye_close_start is None:
+                    eye_close_start = time.time()
+
+                t = time.time() - eye_close_start
+
+                if t >= 2:
+                    eye_alert = True
+                if t >= 4:
+                    eye_danger = True
+            else:
+                eye_close_start = None
+                eye_alert = False
+                eye_danger = False
+
+            response["eyes"] = state
+
+    # =========================
+    # YAWN (simplified MAR)
+    # =========================
+    mar = MAR(lm)
+
+    if mar > MAR_THRESHOLD and not yawn_active:
+        yawn_count += 1
+        yawn_active = True
+
+    if mar < MAR_THRESHOLD:
+        yawn_active = False
+
+    response["yawn"] = yawn_count
+
+    return response

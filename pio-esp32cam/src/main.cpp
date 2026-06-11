@@ -8,7 +8,8 @@
 const char *ssid = "Rwan";
 const char *password = "sa45545sa";
 
-constexpr uint32_t LOOP_DELAY_MS = 1000;
+
+constexpr uint32_t LOOP_DELAY_MS = 50;
 
 void startCameraServer();
 
@@ -45,7 +46,7 @@ void setup()
   if (psramFound())
   {
     Serial.println("PSRAM found");
-    config.frame_size = FRAMESIZE_QVGA;
+    config.frame_size = FRAMESIZE_QVGA; 
     config.jpeg_quality = 12;
     config.fb_count = 1;
   }
@@ -66,6 +67,13 @@ void setup()
   {
     Serial.println("Camera initialized successfully");
   }
+
+  // =========================
+  // FIX ORIENTATION
+  // =========================
+  sensor_t * s = esp_camera_sensor_get();
+  s->set_vflip(s, 1);  
+  s->set_hmirror(s, 1);   
 
   Serial.println("Connecting to WiFi");
 
