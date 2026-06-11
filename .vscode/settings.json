@@ -1,4 +1,21 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "chat.tools.terminal.autoApprove": {
+        ".\\ngrok\\ngrok.exe": true
+    },
+    "chat.agent.networkFilter": true,
+    "chat.agent.sandbox.enabled": "on",
+    "chat.mcp.discovery.enabled": {
+        "claude-desktop": true,
+        "cursor-workspace": true,
+        "cursor-global": true,
+        "windsurf": true
+    },
+    "chat.mcp.gallery.enabled": true,
+    "chat.restoreLastPanelSession": true,
+    "chat.agent.allowedNetworkDomains": [
+        ""
+    ],
+    "chat.planAgent.defaultModel": "Auto (copilot)"
 }

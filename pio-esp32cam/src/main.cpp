@@ -2,26 +2,13 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 
-//
-// WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
-//            Ensure ESP32 Wrover Module or other board with PSRAM is selected
-//            Partial images will be transmitted if image exceeds buffer size
-//
-
-// Select camera model
-// #define CAMERA_MODEL_WROVER_KIT // Has PSRAM
-// #define CAMERA_MODEL_ESP_EYE // Has PSRAM
-// #define CAMERA_MODEL_M5STACK_PSRAM // Has PSRAM
-// #define CAMERA_MODEL_M5STACK_V2_PSRAM // M5Camera version B Has PSRAM
-// #define CAMERA_MODEL_M5STACK_WIDE // Has PSRAM
-// #define CAMERA_MODEL_M5STACK_ESP32CAM // No PSRAM
-#define CAMERA_MODEL_AI_THINKER // Has PSRAM
-// #define CAMERA_MODEL_TTGO_T_JOURNAL // No PSRAM
-
+#define CAMERA_MODEL_AI_THINKER
 #include "camera_pins.h"
 
-const char *ssid = "Nanoo";
-const char *password = "888777888";
+const char *ssid = "Rwan";
+const char *password = "sa45545sa";
+
+constexpr uint32_t LOOP_DELAY_MS = 1000;
 
 void startCameraServer();
 
@@ -55,52 +42,33 @@ void setup()
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
-  //                      for larger pre-allocated frame buffer.
   if (psramFound())
   {
-    Serial.println("PSRAM found, initializing with UXGA resolution and higher JPEG quality");
+    Serial.println("PSRAM found");
     config.frame_size = FRAMESIZE_QVGA;
-    config.jpeg_quality = 24; // smaller JPEG for faster streaming
-    config.fb_count = 2;
+    config.jpeg_quality = 12;
+    config.fb_count = 1;
   }
   else
   {
-    config.frame_size = FRAMESIZE_SVGA;
+    config.frame_size = FRAMESIZE_QQVGA;
     config.jpeg_quality = 12;
     config.fb_count = 1;
   }
 
-#if defined(CAMERA_MODEL_ESP_EYE)
-  pinMode(13, INPUT_PULLUP);
-  pinMode(14, INPUT_PULLUP);
-#endif
-
-  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK)
   {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    Serial.printf("Camera init failed: 0x%x\n", err);
     return;
   }
-
-  sensor_t *s = esp_camera_sensor_get();
-  // initial sensors are flipped vertically and colors are a bit saturated
-  if (s->id.PID == OV3660_PID)
+  else
   {
-    s->set_vflip(s, 1);       // flip it back
-    s->set_brightness(s, 1);  // up the brightness just a bit
-    s->set_saturation(s, -2); // lower the saturation
+    Serial.println("Camera initialized successfully");
   }
-  // Keep a low frame size for higher stream FPS
-  s->set_framesize(s, FRAMESIZE_QVGA);
-
-#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-  s->set_vflip(s, 1);
-  s->set_hmirror(s, 1);
-#endif
 
   Serial.println("Connecting to WiFi");
+
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED)
@@ -108,18 +76,21 @@ void setup()
     delay(500);
     Serial.print(".");
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
+
+  Serial.println("\nWiFi connected");
+
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
 
   startCameraServer();
 
-  Serial.print("Camera Ready! Use 'http://");
+  Serial.println("Camera Ready!");
+  Serial.print("Stream: http://");
   Serial.print(WiFi.localIP());
-  Serial.println("/stream' to connect");
+  Serial.println("/stream");
 }
 
 void loop()
 {
-  // put your main code here, to run repeatedly:
-  delay(10000);
+  delay(LOOP_DELAY_MS);
 }
