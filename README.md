@@ -144,11 +144,6 @@ For the AI demo:
 pip install opencv-python mediapipe numpy requests
 ```
 
-Run the AI stream demo:
-
-```bash
-python AI/esp_test.py
-```
 
 ---
 
@@ -157,7 +152,7 @@ python AI/esp_test.py
 * Add a complete dashboard for monitoring and alerts.
 * Improve drowsiness scoring using temporal smoothing.
 * Add support for analyzing recorded ESP32-CAM data.
-* Integrate real-time warning systems and IoT components.
+
 
 ---
 
