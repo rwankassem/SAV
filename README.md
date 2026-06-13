@@ -1,4 +1,4 @@
-# SAV AI & ESP32-CAM Drowsiness Detection
+# AI & ESP32-CAM Drowsiness Detection
 
 A real-time AI-powered driver drowsiness detection system that combines an ESP32-CAM, Computer Vision, and Deep Learning to monitor driver fatigue. The system detects eye closure and yawning signs and can provide real-time drowsiness warnings.
 
