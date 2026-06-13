@@ -13,7 +13,7 @@ SAV/
 │   └── camera_pins.h         # AI Thinker pin configuration
 │
 ├── AI/
-│   ├── esp_test.py           # Real-time AI inference demo
+│   ├── esp_test.py          
 │   └── training notebooks    # Model training and experiments
 │
 ├── ai_api/
